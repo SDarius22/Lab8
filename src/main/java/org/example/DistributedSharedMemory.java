@@ -1,0 +1,164 @@
+package org.example;
+
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+
+public class DistributedSharedMemory {
+
+    private static class Variable {
+        volatile int value;
+        final Set<String> subscribers; // node IDs
+
+        Variable(int initialValue, Set<String> subscribers) {
+            this.value = initialValue;
+            this.subscribers = Collections.unmodifiableSet(new HashSet<>(subscribers));
+        }
+    }
+
+    // Maps variable name -> Variable
+    private final Map<String, Variable> variables = new ConcurrentHashMap<>();
+
+    // Maps nodeId -> endpoint (callback + request completion)
+    private final Map<String, DsmNodeEndpoint> nodeEndpoints = new ConcurrentHashMap<>();
+
+    // Global sequence for total ordering of changes
+    private final AtomicLong globalSequence = new AtomicLong(0L);
+
+    /**
+     * Register a node endpoint so DSM can notify it.
+     */
+    public void registerNode(String nodeId, DsmNodeEndpoint endpoint) {
+        Objects.requireNonNull(nodeId, "nodeId");
+        Objects.requireNonNull(endpoint, "endpoint");
+        nodeEndpoints.put(nodeId, endpoint);
+    }
+
+    /**
+     * Define a new variable, its initial value, and its static subscribers.
+     * This should be called during initialization, before concurrent use.
+     */
+    public void defineVariable(String name, int initialValue, Set<String> subscribers) {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(subscribers, "subscribers");
+        if (subscribers.isEmpty()) {
+            throw new IllegalArgumentException("Variable must have at least one subscriber");
+        }
+        variables.put(name, new Variable(initialValue, subscribers));
+    }
+
+    /**
+     * Message\-driven entrypoint. This is what a remote node would call
+     * after sending an operation over the network.
+     */
+    public void handleMessage(DsmMessage message) {
+        Objects.requireNonNull(message, "message");
+
+        boolean success;
+        switch (message.getType()) {
+            case WRITE -> {
+                write(message.getNodeId(), message.getVarName(), message.getValue());
+                success = true; // write always succeeds if not illegal
+            }
+            case COMPARE_AND_EXCHANGE -> {
+                Integer expected = message.getExpected();
+                if (expected == null) {
+                    throw new IllegalArgumentException("Expected value is required for CAS");
+                }
+                success = compareAndExchange(
+                        message.getNodeId(),
+                        message.getVarName(),
+                        expected,
+                        message.getValue()
+                );
+            }
+            default -> throw new IllegalStateException("Unknown message type: " + message.getType());
+        }
+
+        // Notify the sender that its request has completed
+        DsmNodeEndpoint senderEndpoint = nodeEndpoints.get(message.getNodeId());
+        if (senderEndpoint != null) {
+            senderEndpoint.onRequestCompleted(message, success);
+        }
+    }
+
+    /**
+     * Returns the current local value of a variable.
+     * (No notifications, just a read.)
+     */
+    public int read(String varName) {
+        Variable var = getExistingVariable(varName);
+        return var.value;
+    }
+
+    /**
+     * Write a new value to a variable.
+     * Only allowed if the caller nodeId is a subscriber.
+     * All subscribers get a callback in the same global order.
+     */
+    public void write(String nodeId, String varName, int newValue) {
+        Objects.requireNonNull(nodeId, "nodeId");
+        Objects.requireNonNull(varName, "varName");
+
+        Variable var = getExistingVariable(varName);
+
+        if (!var.subscribers.contains(nodeId)) {
+            throw new IllegalStateException("Node " + nodeId +
+                    " is not allowed to write variable " + varName);
+        }
+
+        long seq;
+        synchronized (var) {
+            var.value = newValue;
+            seq = globalSequence.incrementAndGet();
+        }
+
+        notifySubscribers(varName, var, seq, newValue);
+    }
+
+    /**
+     * Compare\-and\-exchange.
+     */
+    public boolean compareAndExchange(String nodeId, String varName,
+                                      int expectedValue, int newValue) {
+        Objects.requireNonNull(nodeId, "nodeId");
+        Objects.requireNonNull(varName, "varName");
+
+        Variable var = getExistingVariable(varName);
+
+        if (!var.subscribers.contains(nodeId)) {
+            throw new IllegalStateException("Node " + nodeId +
+                    " is not allowed to update variable " + varName);
+        }
+
+        long seq;
+        synchronized (var) {
+            if (var.value != expectedValue) {
+                // No change, no sequence, no notification
+                return false;
+            }
+            var.value = newValue;
+            seq = globalSequence.incrementAndGet();
+        }
+
+        notifySubscribers(varName, var, seq, newValue);
+        return true;
+    }
+
+    private Variable getExistingVariable(String name) {
+        Variable var = variables.get(name);
+        if (var == null) {
+            throw new IllegalArgumentException("Unknown variable: " + name);
+        }
+        return var;
+    }
+
+    private void notifySubscribers(String varName, Variable var, long seq, int newValue) {
+        for (String subscriberId : var.subscribers) {
+            DsmNodeEndpoint endpoint = nodeEndpoints.get(subscriberId);
+            if (endpoint != null) {
+                endpoint.onVariableChanged(seq, varName, newValue);
+            }
+        }
+    }
+}
