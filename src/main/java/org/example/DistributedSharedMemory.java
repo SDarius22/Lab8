@@ -25,19 +25,12 @@ public class DistributedSharedMemory {
     // Global sequence for total ordering of changes
     private final AtomicLong globalSequence = new AtomicLong(0L);
 
-    /**
-     * Register a node endpoint so DSM can notify it.
-     */
     public void registerNode(String nodeId, DsmNodeEndpoint endpoint) {
         Objects.requireNonNull(nodeId, "nodeId");
         Objects.requireNonNull(endpoint, "endpoint");
         nodeEndpoints.put(nodeId, endpoint);
     }
 
-    /**
-     * Define a new variable, its initial value, and its static subscribers.
-     * This should be called during initialization, before concurrent use.
-     */
     public void defineVariable(String name, int initialValue, Set<String> subscribers) {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(subscribers, "subscribers");
@@ -47,10 +40,6 @@ public class DistributedSharedMemory {
         variables.put(name, new Variable(initialValue, subscribers));
     }
 
-    /**
-     * Message\-driven entrypoint. This is what a remote node would call
-     * after sending an operation over the network.
-     */
     public void handleMessage(DsmMessage message) {
         Objects.requireNonNull(message, "message");
 
@@ -58,7 +47,7 @@ public class DistributedSharedMemory {
         switch (message.getType()) {
             case WRITE -> {
                 write(message.getNodeId(), message.getVarName(), message.getValue());
-                success = true; // write always succeeds if not illegal
+                success = true;
             }
             case COMPARE_AND_EXCHANGE -> {
                 Integer expected = message.getExpected();
@@ -75,27 +64,17 @@ public class DistributedSharedMemory {
             default -> throw new IllegalStateException("Unknown message type: " + message.getType());
         }
 
-        // Notify the sender that its request has completed
         DsmNodeEndpoint senderEndpoint = nodeEndpoints.get(message.getNodeId());
         if (senderEndpoint != null) {
             senderEndpoint.onRequestCompleted(message, success);
         }
     }
 
-    /**
-     * Returns the current local value of a variable.
-     * (No notifications, just a read.)
-     */
     public int read(String varName) {
         Variable var = getExistingVariable(varName);
         return var.value;
     }
 
-    /**
-     * Write a new value to a variable.
-     * Only allowed if the caller nodeId is a subscriber.
-     * All subscribers get a callback in the same global order.
-     */
     public void write(String nodeId, String varName, int newValue) {
         Objects.requireNonNull(nodeId, "nodeId");
         Objects.requireNonNull(varName, "varName");
@@ -116,9 +95,6 @@ public class DistributedSharedMemory {
         notifySubscribers(varName, var, seq, newValue);
     }
 
-    /**
-     * Compare\-and\-exchange.
-     */
     public boolean compareAndExchange(String nodeId, String varName,
                                       int expectedValue, int newValue) {
         Objects.requireNonNull(nodeId, "nodeId");
@@ -134,7 +110,6 @@ public class DistributedSharedMemory {
         long seq;
         synchronized (var) {
             if (var.value != expectedValue) {
-                // No change, no sequence, no notification
                 return false;
             }
             var.value = newValue;

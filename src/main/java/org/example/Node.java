@@ -32,9 +32,6 @@ public class Node implements DsmNodeEndpoint {
     public boolean compareAndExchange(String varName, int expected, int newValue) {
         DsmMessage msg = DsmMessage.compareAndExchange(nodeId, varName, expected, newValue);
         dsm.handleMessage(msg);
-        // In a realistic async system we would track the result differently.
-        // Here handleMessage calls back synchronously, so we can just
-        // re\-read the variable to see whether CAS succeeded.
         return dsm.read(varName) == newValue;
     }
 

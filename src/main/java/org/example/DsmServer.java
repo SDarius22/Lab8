@@ -6,10 +6,6 @@ import java.io.InputStreamReader;
 import java.net.ServerSocket;
 import java.net.Socket;
 
-/**
- * Simple blocking TCP server that accepts DSM operations.
- * This is a first step towards a real distributed setup.
- */
 public class DsmServer {
 
     private final DistributedSharedMemory dsm;
@@ -26,7 +22,6 @@ public class DsmServer {
             while (true) {
                 Socket clientSocket = serverSocket.accept();
                 System.out.println("Accepted connection from " + clientSocket.getRemoteSocketAddress());
-                // For simplicity, handle each client in its own thread
                 new Thread(() -> handleClient(clientSocket)).start();
             }
         }
