@@ -5,10 +5,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Simulates the network between nodes and provides a global total order
- * of updates across all variables.
- */
 public final class DsmBus {
 
     private static final Map<Integer, Set<NodeDsm>> subscribersByVar =
@@ -22,25 +18,33 @@ public final class DsmBus {
         subscribersByVar
                 .computeIfAbsent(varId, k -> new HashSet<>())
                 .add(node);
+        System.out.printf("[BUS] register subscriber %s for var[%d]%n",
+                nodeNameOf(node), varId);
     }
 
     public static void broadcastUpdate(int varId, int newValue, NodeDsm sourceNode) {
         final long version;
         final Set<NodeDsm> subsSnapshot;
 
-        // Get version and a snapshot of subscribers under lock
         synchronized (DsmBus.class) {
             version = ++globalVersion;
             Set<NodeDsm> subs = subscribersByVar.get(varId);
             if (subs == null || subs.isEmpty()) {
+                System.out.printf("[BUS] v%d update var[%d]=%d from %s -> no subscribers%n",
+                        version, varId, newValue, nodeNameOf(sourceNode));
                 return;
             }
             subsSnapshot = new HashSet<>(subs);
+            System.out.printf("[BUS] v%d broadcast var[%d]=%d from %s to %d subscriber(s)%n",
+                    version, varId, newValue, nodeNameOf(sourceNode), subsSnapshot.size());
         }
 
-        // Deliver outside the bus lock to avoid nested locking
         for (NodeDsm node : subsSnapshot) {
             node.applyRemoteUpdate(varId, newValue, version);
         }
+    }
+
+    private static String nodeNameOf(NodeDsm node) {
+        return node.toString();
     }
 }

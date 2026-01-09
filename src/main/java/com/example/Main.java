@@ -10,8 +10,7 @@ public class Main {
 
     public static void main(String[] args) {
         int processCount = 3;
-
-        // Static subscriptions per process
+        
         List<Integer> p0Vars = Arrays.asList(0, 1);
         List<Integer> p1Vars = Arrays.asList(1, 2);
         List<Integer> p2Vars = Arrays.asList(2, 3, 4);
@@ -38,6 +37,7 @@ public class Main {
             }
         }
 
+        System.out.println("=== FINAL DSM STATE ===");
         for (NodeDsm dsm : dsms) {
             System.out.println(dsm);
         }
@@ -45,23 +45,26 @@ public class Main {
 
     private static void runProcess(int processId, NodeDsm dsm) {
         Dsm.DsmListener listener = (varId, newValue, version) -> {
-            System.out.printf("[Callback P%d] version=%d var[%d]=%d%n",
+            System.out.printf("[CALLBACK P%d] received v%d for var[%d] -> %d%n",
                     processId, version, varId, newValue);
         };
         dsm.addListener(listener);
 
         switch (processId) {
             case 0 -> {
+                System.out.println("[PROC 0] starting");
                 dsm.write(0, 10);
                 sleepQuietly(2000);
                 dsm.compareAndExchange(1, 0, 100);
             }
             case 1 -> {
+                System.out.println("[PROC 1] starting");
                 dsm.write(1, 20);
                 sleepQuietly(2000);
                 dsm.compareAndExchange(2, 0, 200);
             }
             case 2 -> {
+                System.out.println("[PROC 2] starting");
                 dsm.write(2, 30);
                 sleepQuietly(2000);
                 dsm.compareAndExchange(3, 0, 300);
@@ -71,6 +74,7 @@ public class Main {
         }
 
         dsm.removeListener(listener);
+        System.out.printf("[PROC %d] finished%n", processId);
     }
 
     private static void sleepQuietly(long millis) {

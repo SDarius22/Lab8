@@ -2,10 +2,7 @@ package com.example.dsm;
 
 import java.util.*;
 
-/**
- * DSM instance attached to a single process/node.
- * It only stores variables this node is subscribed to.
- */
+
 public class NodeDsm implements Dsm {
 
     private final String nodeName;
@@ -18,6 +15,8 @@ public class NodeDsm implements Dsm {
         this.subscribedVarIds.addAll(subscribedVarIds);
         for (int varId : subscribedVarIds) {
             localVars.put(varId, 0);
+            System.out.printf("[NODE %s] subscribe to var[%d], initial value = 0%n",
+                    nodeName, varId);
             DsmBus.registerSubscriber(varId, this);
         }
     }
@@ -25,7 +24,7 @@ public class NodeDsm implements Dsm {
     private void checkSubscribed(int varId) {
         if (!subscribedVarIds.contains(varId)) {
             throw new IllegalArgumentException(
-                    nodeName + " is not subscribed to var[" + varId + "]");
+                    "[NODE " + nodeName + "] access to var[" + varId + "] denied (not subscribed)");
         }
     }
 
@@ -33,8 +32,10 @@ public class NodeDsm implements Dsm {
     public void write(int varId, int value) {
         checkSubscribed(varId);
         synchronized (this) {
+            int old = localVars.get(varId);
             localVars.put(varId, value);
-            System.out.printf("[%s] local write var[%d] = %d%n", nodeName, varId, value);
+            System.out.printf("[NODE %s] local WRITE var[%d]: %d -> %d%n",
+                    nodeName, varId, old, value);
         }
         // outside synchronized(this)
         DsmBus.broadcastUpdate(varId, value, this);
@@ -44,7 +45,8 @@ public class NodeDsm implements Dsm {
     public synchronized int read(int varId) {
         checkSubscribed(varId);
         int value = localVars.get(varId);
-        System.out.printf("[%s] read var[%d] -> %d%n", nodeName, varId, value);
+        System.out.printf("[NODE %s] READ var[%d] -> %d%n",
+                nodeName, varId, value);
         return value;
     }
 
@@ -55,12 +57,12 @@ public class NodeDsm implements Dsm {
         synchronized (this) {
             int current = localVars.get(varId);
             if (current != expectedValue) {
-                System.out.printf("[%s] CAS var[%d]: expected=%d, actual=%d -> no change%n",
+                System.out.printf("[NODE %s] CAS FAILED var[%d]: expected=%d, actual=%d%n",
                         nodeName, varId, expectedValue, current);
                 return false;
             }
             localVars.put(varId, newValue);
-            System.out.printf("[%s] CAS var[%d]: %d -> %d%n",
+            System.out.printf("[NODE %s] CAS SUCCESS var[%d]: %d -> %d%n",
                     nodeName, varId, current, newValue);
             changed = true;
         }
@@ -73,20 +75,23 @@ public class NodeDsm implements Dsm {
     @Override
     public synchronized void addListener(DsmListener listener) {
         listeners.add(listener);
+        System.out.printf("[NODE %s] listener registered%n", nodeName);
     }
 
     @Override
     public synchronized void removeListener(DsmListener listener) {
         listeners.remove(listener);
+        System.out.printf("[NODE %s] listener removed%n", nodeName);
     }
-
+    
     public synchronized void applyRemoteUpdate(int varId, int newValue, long version) {
         if (!subscribedVarIds.contains(varId)) {
             return;
         }
+        int old = localVars.get(varId);
         localVars.put(varId, newValue);
-        System.out.printf("[%s] applyRemoteUpdate var[%d] = %d (version=%d)%n",
-                nodeName, varId, newValue, version);
+        System.out.printf("[NODE %s] APPLY UPDATE v%d var[%d]: %d -> %d%n",
+                nodeName, version, varId, old, newValue);
         for (DsmListener listener : listeners) {
             listener.onVariableChanged(varId, newValue, version);
         }
